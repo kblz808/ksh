@@ -1,24 +1,55 @@
 const std = @import("std");
 
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+pub fn main() !u8 {
+    const max_input = 1024;
+    const max_args = 10;
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    var stdin = std.io.getStdIn().reader();
+    var stdout = std.io.getStdOut().writer();
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    while (true) {
+        try stdout.print(">", null);
 
-    try bw.flush(); // don't forget to flush!
-}
+        var input_buffer: [max_input]u8 = undefined;
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+        var input_str = (try stdin.readUntilDelimiterOrEof(input_buffer[0..], '\n')) orelse {
+            try stdout.print("\n", .{});
+            return 0;
+        };
+
+        if (input_str.len == 0) continue;
+
+        var args_ptrs: [max_args:null]?[*:0]u8 = undefined;
+
+        var i: usize = 0;
+        var n: usize = 0;
+        var ofs: usize = 0;
+        while (i <= input_str.len) : (i += 1) {
+            if (input_buffer[i] == 0x20 or input_buffer[i] == 0xa) {
+                input_buffer[i] = 0;
+                args_ptrs[n] = @as(*align(1) const [*:0]u8, @ptrCast(&input_buffer[ofs..i :0])).*;
+                n += 1;
+                ofs = i + 1;
+            }
+        }
+        args_ptrs[n] = null;
+
+        const fork_pid = try std.os.fork();
+
+        if (fork_pid == 0) {
+            const env = [_:null]?[*:0]u8{null};
+
+            const result = std.os.execvpeZ(args_ptrs[0].?, &args_ptrs, &env);
+
+            try stdout.print("ERROR: {}\n", .{result});
+            return 1;
+        } else {
+            const wait_result = std.os.waitpid(fork_pid, 0);
+            if (wait_result.status != 0) {
+                try stdout.print("Command returned {}.\n", .{wait_result.status});
+            }
+        }
+    }
+
+    return 0;
 }
